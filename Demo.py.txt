@@ -1,0 +1,89 @@
+from flask import Flask, render_template, request, redirect, url_for, flash
+from werkzeug.utils import secure_filename
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+import os
+
+app = Flask(_name_)
+app.config['SECRET_KEY'] = 'your_secret_key_here'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
+
+# Create the database instance
+db = SQLAlchemy(app)
+
+# Configure the upload folder
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Configure the allowed file extensions
+ALLOWED_EXTENSIONS = {'mp3'}
+
+# Configure Flask-Login
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# Define the User model
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(120), nullable=False)
+    files = db.relationship('File', backref='user', lazy=True)
+
+# Define the File model
+class File(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(120), nullable=False)
+    visibility = db.Column(db.String(10), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    allowed_emails = db.Column(db.String(500))
+
+# Initialize the database
+db.create_all()
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+@app.route('/')
+@login_required
+def home():
+    # Fetch all public files and user's files
+    public_files = File.query.filter_by(visibility='Public').all()
+    user_files = File.query.filter_by(user=current_user).all()
+    
+    # Fetch protected files accessible to the current user
+    protected_files = File.query.filter(File.visibility=='Protected', 
+                                        (File.allowed_emails==None) | 
+                                        (File.allowed_emails.contains(current_user.email))).all()
+    
+    return render_template('home.html', public_files=public_files, user_files=user_files, protected_files=protected_files)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        # Check if the email is already registered
+        if User.query.filter_by(email=email).first():
+            flash('Email already registered.', 'error')
+            return redirect(url_for('register'))
+        
+        # Create a new user
+        user = User(email=email, password=password)
+        db.session.add(user)
+        db.session.commit()
+        
+        flash('Registration successful. Please log in.', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        # Check if the email and password are valid
+        user = User.query.filter_by(email=email).first()
